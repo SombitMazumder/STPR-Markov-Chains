@@ -35,7 +35,7 @@ class MarkovChain:
         self.t_index = {s: k for k, s in enumerate(self.transient)}
         self.r_index = {s: k for k, s in enumerate(self.recurrent)}
 
-    # ------------------------------------------------------------------ checks
+    
     def _validate(self):
         if self.P.ndim != 2 or self.P.shape[0] != self.P.shape[1]:
             raise ValueError("Transition matrix must be square.")
@@ -65,7 +65,7 @@ class MarkovChain:
         if np.max(np.abs(np.linalg.eigvals(Q))) >= 1 - 1e-12:
             raise ValueError("The 'transient' set can never be left (some part of it is recurrent).")
 
-    # ------------------------------------------------------------- simulation
+    
     def simulate(self, start, num_runs, max_steps=1_000_000):
         """
         Run num_runs independent trajectories from `start` (a transient state),
@@ -107,7 +107,6 @@ class MarkovChain:
 
         return absorbed_in, exit_steps
 
-    # ----------------------------------------------------------- empirical
     def empirical_results(self, absorbed_in, exit_steps):
         counts = np.array([(absorbed_in == s).sum() for s in self.recurrent])
         dist = counts / len(absorbed_in)
@@ -115,7 +114,6 @@ class MarkovChain:
         std_err = exit_steps.std(ddof=1) / np.sqrt(len(exit_steps))
         return dist, mean_exit, std_err
 
-    # ------------------------------------------------------------ theoretical
     def theoretical_results(self, start):
         Q = self.P[np.ix_(self.transient, self.transient)]
         S = self.P[np.ix_(self.transient, self.recurrent)]
@@ -126,7 +124,6 @@ class MarkovChain:
         return B[k], t[k]
 
 
-# ---------------------------------------------------------------------- helpers
 def report(chain, start, dist_emp, mean_emp, se_emp, dist_th, mean_th, num_runs):
     print(f"Start state: {chain.labels[start]}   Runs: {num_runs}\n")
     print(f"{'Final state':<14}{'Empirical':>12}{'Theoretical':>14}{'|Diff|':>10}")
