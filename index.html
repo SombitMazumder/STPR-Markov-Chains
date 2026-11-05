@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f5ee">
+  <meta name="description" content="Simulate Markov chains and compare first-entry probabilities and exit times with exact solutions.">
+  <title>Markov chains</title>
+  <link rel="stylesheet" href="web/style.css"><script type="module" src="web/app.js"></script>
+</head>
+<body>
+  <header><h1>Markov chains</h1><a href="dtmc.py" download>Python source ↗</a></header>
+  <main>
+    <section class="experiment" aria-label="Simulation">
+      <aside class="controls">
+        <fieldset id="settings"><legend class="sr-only">Simulation settings</legend>
+          <label for="preset">Preset</label><select id="preset"><option value="original">Mixed · 6 states</option><option value="coin">Geometric · 3 states</option><option value="walk">Random walk · 5 states</option><option value="custom">Custom</option></select>
+          <div class="two-fields"><div><label for="start">Start</label><select id="start"></select></div><div><label for="runs">Runs</label><input id="runs" type="number" min="2" max="200000" step="1" value="10000"></div></div>
+          <details class="advanced"><summary>Advanced</summary><div class="two-fields"><div><label for="seed">Seed</label><input id="seed" type="number" min="0" max="4294967295" value="10"></div><div><label for="limit">Step limit / run</label><input id="limit" type="number" min="1" max="1000000" value="10000"></div></div></details>
+          <button id="run" class="primary">Run</button>
+        </fieldset>
+        <button id="cancel" class="quiet" hidden>Cancel</button>
+        <p id="status" role="status" aria-live="polite">Ready.</p><progress id="progress" value="0" max="1" hidden aria-label="Simulation progress"></progress>
+        <p id="error" class="error" role="alert" hidden></p>
+      </aside>
+      <div class="map-panel">
+        <div class="legend"><span><i class="transient-dot"></i>Transient</span><span><i class="recurrent-dot"></i>Recurrent</span><span><i class="absorbing-dot"></i>Absorbing</span></div>
+        <div class="graph-stage"><svg id="graph" viewBox="0 0 760 430" role="group" aria-label="State transitions. Select a state to inspect outgoing probabilities."></svg><canvas id="particles" width="760" height="430" aria-hidden="true"></canvas></div>
+        <div class="map-bottom"><p id="inspector"></p><div class="playback-controls"><label class="speed-control" for="speed">Speed <input id="speed" type="range" min="0" max="3" step="1" value="1" aria-valuetext="0.5 times speed"><output id="speed-value" for="speed">0.5×</output></label><button id="pause" class="quiet" hidden>Pause</button><button id="replay" class="quiet" disabled>Replay</button></div></div>
+        <p id="path-note" class="path-note" aria-live="off"></p>
+      </div>
+    </section>
+    <details id="matrix-details" class="matrix-section"><summary>Matrix & state types</summary>
+      <div class="matrix-body"><div class="matrix-top"><p>Rows → columns. Each row must sum to 1.</p><div class="state-count"><label for="state-count">States</label><input id="state-count" type="number" min="2" max="12" value="6"><button id="resize" class="quiet">Resize</button></div></div>
+      <div class="table-scroll"><table id="matrix" aria-label="Transition matrix"></table></div><div id="classifications" class="classifications"></div><p class="hint">Recurrent includes absorbing states.</p></div>
+    </details>
+    <section id="results" class="results-section" aria-label="Results" hidden>
+      <div class="results-heading"><h2>Results</h2><button id="download" class="quiet" disabled>Download ↓</button></div>
+      <div class="mean-results"><span>Mean exit time <strong id="mean"></strong> steps</span><span>Theory <strong id="exact-mean"></strong></span><span>95% CI <strong id="interval"></strong></span></div>
+      <div class="table-scroll"><table class="result-table"><caption>First recurrent / absorbing state reached</caption><thead><tr><th>State</th><th>Empirical</th><th>Theoretical</th><th>Difference</th></tr></thead><tbody id="result-rows"></tbody></table></div>
+    </section>
+    <details class="method"><summary>Method</summary><p>Runs stop on first entry into the recurrent set. Exact probabilities and mean exit times solve (I − Q)B = S and (I − Q)t = 1. The 95% interval is a normal approximation for the empirical mean.</p><p>Every run is shown as a point. Filled strips below each state show its share of runs. Playback shows at most 200 steps; estimates use complete trajectories up to the configured step limit. Overlapping points are counted in the state totals.</p></details>
+  </main>
+</body></html>

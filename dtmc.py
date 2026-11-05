@@ -73,10 +73,13 @@ class MarkovChain:
         if np.max(np.abs(np.linalg.eigvals(Q))) >= 1 - 1e-12:
             raise ValueError("The transient set contains states that are not transient.")
 
-    def simulate(self, start, num_runs, max_steps=1_000_000):
+    def simulate(self, start, num_runs, max_steps=1_000_000, *, on_step=None):
         """
         Run num_runs independent trajectories from `start` (a transient state),
         each stopping on first entry to the recurrent set.
+
+        on_step(step, states) optionally records website animation frames.
+        Copy states to retain them; do not modify the supplied array.
 
         Returns (absorbed_in, exit_steps), arrays of length num_runs:
           absorbed_in[k] - first recurrent state reached by run k
@@ -91,6 +94,8 @@ class MarkovChain:
         exit_steps = np.zeros(num_runs, dtype=int)
         active = np.arange(num_runs)  # indices of runs still in the transient set
         step = 0
+        if on_step is not None:
+            on_step(step, current)
         while active.size > 0:
             step += 1
             if step > max_steps:
@@ -104,6 +109,8 @@ class MarkovChain:
                 else:                             # still transient, keep simulating it
                     still_active.append(k)
             active = np.array(still_active, dtype=int)
+            if on_step is not None:
+                on_step(step, current)
         return absorbed_in, exit_steps
 
     def empirical_results(self, absorbed_in, exit_steps):
