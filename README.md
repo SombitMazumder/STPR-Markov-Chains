@@ -10,23 +10,17 @@ Requires Python 3.10+ and NumPy:
 
 ```sh
 python3 -m pip install -r requirements.txt
-python3 dtmc.py                       # Original six-state example, 200,000 runs
-python3 dtmc.py --config example.json # User-defined example
+python3 dtmc.py  # Reads input.json and writes output.txt next to the script
 python3 -m unittest discover -s tests -v
 ```
 
-A JSON configuration requires `transition_matrix`, `transient`, `recurrent`, and
-`start`. State indices are zero-based. Optional fields: `labels`, `num_runs`
-(default 200,000), `seed` (default 10), `max_steps` (default 1,000,000).
-`example.json` is a complete, editable example. At least two trajectories are
-required to estimate the standard error.
+Edit `input.json` to set `matrix`, `transient`, `recurrent`, and `starts`.
+Optional fields are `labels`, `num_runs` (default 200,000), and `seed` (default 10).
+State indices are zero-based. Use at least two runs to estimate the standard error.
 
-The engine rejects duplicate/noninteger indices, inconsistent classifications,
-invalid probabilities, and nonpositive step limits. Rows must sum to one within
-an absolute tolerance of `1e-10`; only this small rounding discrepancy is
-normalized. Recurrent states must belong to closed communicating classes, and
-all transient states must be able to reach the recurrent set. A run exceeding
-the step limit raises an error instead of silently biasing the estimates.
+`dtmc.py` follows `main.py`, with only an optional `on_step` callback added to
+`simulate` for website animation. The command-line input, validation, calculations,
+and reports follow `main.py` unchanged. Browser-specific handling stays in `web/`.
 
 ## Preview the website
 
@@ -100,7 +94,7 @@ expected exit times solve:
 (I - Q) t = 1
 ```
 
-`numpy.linalg.solve` avoids explicitly computing an inverse. The displayed
+`numpy.linalg.inv` computes the fundamental matrix, as in `main.py`. The displayed
 interval is `sample_mean ± 1.96 × sample_standard_error`, a large-sample normal
 approximation. It is not a correctness test; with few runs or a long-tailed exit
 time distribution it can be unreliable. Very slowly exiting chains may need a

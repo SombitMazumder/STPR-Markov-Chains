@@ -15,16 +15,13 @@ Theory (states ordered as transient T, recurrent R):
     N = (I - Q)^-1      expected visits to each transient state
     t = N @ 1           expected steps to leave T
     B = N @ S           B[i, j] = P(first recurrent state entered is j | start i)
-By default, read input.json next to this script and write output.txt there.
-Use --config and --output to select other files. Configurations may use
-transition_matrix/start or matrix/starts for one or several starting states.
+
+The matrix, state classification, starting states and run count are read
+from INPUT_FILE (a JSON file placed next to this script). The report for
+every starting state, plus a summary table, is written to OUTPUT_FILE.
 """
-
-import argparse
-import json
-from numbers import Integral
 from pathlib import Path
-
+import json
 import numpy as np
 
 
@@ -32,42 +29,34 @@ HERE = Path(__file__).resolve().parent
 INPUT_FILE = HERE / "input.json"
 OUTPUT_FILE = HERE / "output.txt"
 
-
 class MarkovChain:
     def __init__(self, transition_matrix, transient, recurrent, labels=None, seed=10):
-        self.P = np.array(transition_matrix, dtype=float, copy=True)
-        if self.P.ndim != 2 or self.P.shape[0] != self.P.shape[1] or self.P.shape[0] == 0:
-            raise ValueError("Transition matrix must be non-empty and square.")
+        self.P = np.asarray(transition_matrix, dtype=float)
         self.n = self.P.shape[0]
         self.transient = list(transient)
         self.recurrent = list(recurrent)
         self.labels = labels if labels is not None else [str(i) for i in range(self.n)]
         self.rng = np.random.default_rng(seed)
-
         self._validate()
-
         # Position of each state inside the transient / recurrent lists.
         self.t_index = {s: k for k, s in enumerate(self.transient)}
         self.r_index = {s: k for k, s in enumerate(self.recurrent)}
 
-    
     def _validate(self):
         if self.P.ndim != 2 or self.P.shape[0] != self.P.shape[1] or self.P.shape[0] == 0:
             raise ValueError("Transition matrix must be non-empty and square.")
-        if not np.all(np.isfinite(self.P)) or np.any(self.P < 0):
-            raise ValueError("Transition probabilities must be finite and nonnegative.")
-        row_sums = self.P.sum(axis=1)
-        if not np.allclose(row_sums, 1.0, rtol=0, atol=1e-10):
+        if not np.all(np.isfinite(self.P)):
+            raise ValueError("Transition matrix must contain finite values.")
+        if np.any(self.P < 0):
+            raise ValueError("Transition matrix has negative entries.")
+        if not np.allclose(self.P.sum(axis=1), 1.0, atol=1e-10):
             raise ValueError("Each row of the transition matrix must sum to 1.")
-        self.P /= row_sums[:, None]  # Remove only negligible rounding error.
         if len(self.labels) != self.n or len(set(self.labels)) != self.n:
             raise ValueError("Labels must be unique and match the number of states.")
-
-        for states in (self.transient, self.recurrent):
-            if any(not isinstance(s, Integral) or isinstance(s, (bool, np.bool_)) for s in states):
-                raise ValueError("State indices must be integers.")
-            if len(states) != len(set(states)):
-                raise ValueError("State classifications must not contain duplicates.")
+        if not all(isinstance(s, (int, np.integer)) and not isinstance(s, (bool, np.bool_)) for s in self.transient + self.recurrent):
+            raise ValueError("State indices must be integers.")
+        if len(set(self.transient)) != len(self.transient) or len(set(self.recurrent)) != len(self.recurrent):
+            raise ValueError("Duplicate state indices are not allowed.")
         if any(s < 0 or s >= self.n for s in self.transient + self.recurrent):
             raise ValueError("State indices must lie between 0 and n-1.")
         t, r = set(self.transient), set(self.recurrent)
@@ -77,74 +66,51 @@ class MarkovChain:
             raise ValueError("Every state must be classified as transient or recurrent.")
         if not t or not r:
             raise ValueError("Need at least one transient and one recurrent/absorbing state.")
-
-        # The recurrent set must be closed: no probability leaks back to transient.
         leak = self.P[np.ix_(self.recurrent, self.transient)]
-        if np.any(leak > 0):
+        if np.any(leak > 1e-12):
             raise ValueError("Recurrent states can move to transient states, so they are not closed.")
+        Q = self.P[np.ix_(self.transient, self.transient)]
+        if np.max(np.abs(np.linalg.eigvals(Q))) >= 1 - 1e-12:
+            raise ValueError("The transient set contains states that are not transient.")
 
-        # Reachability identifies closed communicating classes without SciPy.
-        reachable = (self.P > 0) | np.eye(self.n, dtype=bool)
-        for k in range(self.n):
-            reachable |= reachable[:, k, None] & reachable[None, k, :]
-        for s in self.recurrent:
-            if np.any(reachable[s] & ~reachable[:, s]):
-                raise ValueError(f"State {s} is not recurrent: it can leave its communicating class.")
-        if not np.all(reachable[np.ix_(self.transient, self.recurrent)].any(axis=1)):
-            raise ValueError("Some declared transient states cannot reach the recurrent set.")
-
-    
     def simulate(self, start, num_runs, max_steps=1_000_000, *, on_step=None):
         """
         Run num_runs independent trajectories from `start` (a transient state),
         each stopping on first entry to the recurrent set.
 
-        Optional on_step(step, states) observes the initial and subsequent states
-        of all runs, including stopped runs. Copy states to retain a snapshot;
-        the callback must not modify this array.
+        on_step(step, states) optionally records website animation frames.
+        Copy states to retain them; do not modify the supplied array.
 
         Returns (absorbed_in, exit_steps), arrays of length num_runs:
           absorbed_in[k] - first recurrent state reached by run k
           exit_steps[k]  - number of steps taken to get there
         """
-        if not isinstance(start, Integral) or isinstance(start, (bool, np.bool_)) or start not in self.t_index:
+        if start not in self.t_index:
             raise ValueError(f"Start state {start} is not a transient state.")
-        if not isinstance(num_runs, Integral) or isinstance(num_runs, (bool, np.bool_)) or num_runs < 2:
-            raise ValueError("num_runs must be an integer of at least 2 (for standard error).")
-        if not isinstance(max_steps, Integral) or isinstance(max_steps, (bool, np.bool_)) or max_steps < 1:
-            raise ValueError("max_steps must be a positive integer.")
-
         is_recurrent = np.zeros(self.n, dtype=bool)
         is_recurrent[self.recurrent] = True
-
         current = np.full(num_runs, start, dtype=int)
         absorbed_in = np.full(num_runs, -1, dtype=int)
         exit_steps = np.zeros(num_runs, dtype=int)
         active = np.arange(num_runs)  # indices of runs still in the transient set
-
         step = 0
         if on_step is not None:
             on_step(step, current)
-        
         while active.size > 0:
             step += 1
             if step > max_steps:
-                raise RuntimeError("max_steps reached before all runs exited; increase the step limit or revise the matrix. No incomplete estimate is reported.")
-
+                raise RuntimeError("max_steps reached; check the transition matrix.")
             still_active = []
             for k in active:
                 current[k] = self.rng.choice(self.n, p=self.P[current[k]])
-
                 if is_recurrent[current[k]]:      # run k just left the transient set
                     absorbed_in[k] = current[k]
                     exit_steps[k] = step
                 else:                             # still transient, keep simulating it
                     still_active.append(k)
-
             active = np.array(still_active, dtype=int)
             if on_step is not None:
                 on_step(step, current)
-
         return absorbed_in, exit_steps
 
     def empirical_results(self, absorbed_in, exit_steps):
@@ -155,14 +121,11 @@ class MarkovChain:
         return dist, mean_exit, std_err
 
     def theoretical_results(self, start):
-        if not isinstance(start, Integral) or isinstance(start, (bool, np.bool_)) or start not in self.t_index:
-            raise ValueError(f"Start state {start} is not a transient state.")
         Q = self.P[np.ix_(self.transient, self.transient)]
         S = self.P[np.ix_(self.transient, self.recurrent)]
-        # Solve the fundamental-matrix equations without explicitly inverting.
-        solutions = np.linalg.solve(np.eye(len(self.transient)) - Q,
-                                    np.column_stack((S, np.ones(len(self.transient)))))
-        B, t = solutions[:, :-1], solutions[:, -1]
+        N = np.linalg.inv(np.eye(len(self.transient)) - Q)  # fundamental matrix
+        B = N @ S                                           # absorption probabilities
+        t = N.sum(axis=1)                                   # expected exit times
         k = self.t_index[start]
         return B[k], t[k]
 
@@ -171,8 +134,7 @@ def report(chain, start, dist_emp, mean_emp, se_emp, dist_th, mean_th, num_runs)
     lines = []
     lines.append(f"Start state: {chain.labels[start]}   Runs: {num_runs}")
     lines.append("")
-    lines.append("Distribution of the first recurrent/absorbing state reached:")
-    lines.append(f"{'Entry state':<14}{'Empirical':>12}{'Theoretical':>14}{'|Diff|':>10}")
+    lines.append(f"{'Final state':<14}{'Empirical':>12}{'Theoretical':>14}{'|Diff|':>10}")
     for s, e, t in zip(chain.recurrent, dist_emp, dist_th):
         lines.append(f"{chain.labels[s]:<14}{e:>12.5f}{t:>14.5f}{abs(e - t):>10.5f}")
     lines.append("")
@@ -184,55 +146,38 @@ def report(chain, start, dist_emp, mean_emp, se_emp, dist_th, mean_th, num_runs)
 
 
 def load_input(path):
-    with open(path, encoding="utf-8") as file:
-        return json.load(file)
+    # Reading a JSON file that does not exist raises FileNotFoundError on its
+    # own, with a clear message, so no extra error handling is added here.
+    with open(path, "r") as f:
+        cfg = json.load(f)
+    return cfg
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=INPUT_FILE,
-                        help="JSON input file (default: input.json next to the script). Accepts transition_matrix/start or matrix/starts.")
-    parser.add_argument("--output", type=Path, default=OUTPUT_FILE,
-                        help="Report file (default: output.txt next to the script).")
-    args = parser.parse_args()
-    cfg = load_input(args.config)
-    for key in ("transient", "recurrent"):
-        if key not in cfg:
-            parser.error(f"Configuration is missing '{key}'.")
-    if "transition_matrix" in cfg:
-        P = cfg["transition_matrix"]
-    elif "matrix" in cfg:
-        P = cfg["matrix"]
-    else:
-        parser.error("Configuration requires 'transition_matrix' or 'matrix'.")
-    if "starts" in cfg:
-        starts = cfg["starts"]
-    elif "start" in cfg:
-        starts = [cfg["start"]]
-    else:
-        parser.error("Configuration requires 'start' or 'starts'.")
-    if not isinstance(starts, list) or not starts:
-        parser.error("'starts' must be a non-empty list of transient state indices.")
-
+if __name__ == "__main__":
+    cfg = load_input(INPUT_FILE)
+    labels = cfg.get("labels")
+    P = cfg["matrix"]
+    transient = cfg["transient"]
+    recurrent = cfg["recurrent"]
+    starts = cfg["starts"]
     num_runs = cfg.get("num_runs", 200_000)
-    chain = MarkovChain(P, cfg["transient"], cfg["recurrent"],
-                        labels=cfg.get("labels"), seed=cfg.get("seed", 10))
-    # Check all starting states before doing any potentially expensive simulations.
-    for start in starts:
-        if not isinstance(start, Integral) or isinstance(start, bool) or start not in chain.t_index:
-            parser.error(f"Start state {start} is not a transient state.")
+    seed = cfg.get("seed", 10)
+
+    chain = MarkovChain(P, transient, recurrent, labels=labels, seed=seed)
 
     output_lines = []
     summary_rows = []
     for i, start in enumerate(starts):
-        absorbed_in, exit_steps = chain.simulate(start, num_runs, cfg.get("max_steps", 1_000_000))
+        absorbed_in, exit_steps = chain.simulate(start, num_runs)
         dist_emp, mean_emp, se_emp = chain.empirical_results(absorbed_in, exit_steps)
         dist_th, mean_th = chain.theoretical_results(start)
         section = report(chain, start, dist_emp, mean_emp, se_emp, dist_th, mean_th, num_runs)
         print(f"--- Run {i + 1} of {len(starts)} ---")
         print(section)
         print()
-        output_lines.extend([f"--- Run {i + 1} of {len(starts)} ---", section, ""])
+        output_lines.append(f"--- Run {i + 1} of {len(starts)} ---")
+        output_lines.append(section)
+        output_lines.append("")
         inside = abs(mean_emp - mean_th) <= 1.96 * se_emp
         summary_rows.append((chain.labels[start], mean_emp, mean_th, inside))
 
@@ -240,8 +185,6 @@ def main():
     output_lines.append(f"{'Start':<10}{'Empirical':>14}{'Theoretical':>14}{'In 95% CI':>12}")
     for label, mean_emp, mean_th, inside in summary_rows:
         output_lines.append(f"{label:<10}{mean_emp:>14.4f}{mean_th:>14.4f}{str(inside):>12}")
-    args.output.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
 
-
-if __name__ == "__main__":
-    main()
+    with open(OUTPUT_FILE, "w") as f:
+        f.write("\n".join(output_lines) + "\n")
