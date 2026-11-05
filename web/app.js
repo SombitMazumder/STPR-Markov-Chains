@@ -1,10 +1,17 @@
+import {frameStates, populations} from './playback.mjs';
 const $ = id => document.getElementById(id);
 const presets = {
-  original: {note: 'Three transient states, one absorbing destination, and a recurrent pair.', matrix: [[.2,.4,.1,.2,.1,0],[.3,.1,.3,0,.1,.2],[0,.3,.3,.1,0,.3],[0,0,0,1,0,0],[0,0,0,0,.5,.5],[0,0,0,0,.7,.3]], transient: [0,1,2], start: 0},
-  coin: {note: 'Wait in A, then leave for B or C. A geometric waiting time with two destinations.', matrix: [[.5,.2,.3],[0,1,0],[0,0,1]], transient: [0], start: 0},
-  walk: {note: 'A symmetric random walk. The two shores, A and E, are absorbing.', matrix: [[1,0,0,0,0],[.5,0,.5,0,0],[0,.5,0,.5,0],[0,0,.5,0,.5],[0,0,0,0,1]], transient: [1,2,3], start: 2}
+  original: {matrix: [[.2,.4,.1,.2,.1,0],[.3,.1,.3,0,.1,.2],[0,.3,.3,.1,0,.3],[0,0,0,1,0,0],[0,0,0,0,.5,.5],[0,0,0,0,.7,.3]], transient: [0,1,2], start: 0},
+  coin: {matrix: [[.5,.2,.3],[0,1,0],[0,0,1]], transient: [0], start: 0},
+  walk: {matrix: [[1,0,0,0,0],[.5,0,.5,0,0],[0,.5,0,.5,0],[0,0,.5,0,.5],[0,0,0,0,1]], transient: [1,2,3], start: 2}
 };
-let matrix, transient, selected = 0, worker, running = false, lastResult, paths = [], positions = [], animationId, animationVersion = 0, activeConfig;
+let matrix, transient, selected = 0, worker, running = false, lastResult, chunks = [], positions = [], animationId, activeConfig;
+let totalFrames = 0, frameIndex = 0, elapsed = 0, lastTick = 0, paused = true;
+let fromStates, toStates, offsetX, offsetY, startX, startY, endX, endY;
+const playbackSpeeds = [0.25, 0.5, 1, 2];
+let playbackSpeed = playbackSpeeds[1];
+const canvas = $('particles'), context = canvas.getContext('2d');
+canvas.width = 1520; canvas.height = 860; context.scale(2, 2);
 const label = i => String.fromCharCode(65 + i);
 const percent = x => `${(100*x).toFixed(2)}%`;
 const number = x => Number(x).toLocaleString(undefined, {maximumFractionDigits: 4});
@@ -16,21 +23,23 @@ function svg(tag, attrs = {}, text) {
   return el;
 }
 function invalidate() {
-  lastResult = null; paths = []; stopAnimation();
-  $('results').hidden = true; $('empty-results').hidden = false;
+  lastResult = null; chunks = []; totalFrames = 0; frameIndex = 0; stopAnimation();
+  $('results').hidden = true;
   $('download').disabled = true; $('replay').disabled = true;
-  $('error').hidden = true; $('status').textContent = 'Setup changed. Ready for a new experiment.';
+  $('error').hidden = true; $('status').textContent = 'Settings changed.';
   $('progress').hidden = true;
-  $('path-note').textContent = 'Each arrow is a possible next step. Its weight is a probability.';
+  $('path-note').textContent = '';
+  document.querySelectorAll('.node-count').forEach(el => el.textContent = '');
+  document.querySelectorAll('.population-track').forEach(el => el.setAttribute('hidden', ''));
 }
 function loadPreset(name) {
   const preset = presets[name];
   if (!preset) { $('matrix-details').open = true; return; }
   matrix = structuredClone(preset.matrix); transient = [...preset.transient]; selected = preset.start;
-  $('preset-note').textContent = preset.note; $('state-count').value = matrix.length;
+  $('state-count').value = matrix.length;
   invalidate(); renderEditor(); $('start').value = preset.start; renderGraph();
 }
-function custom() { $('preset').value = 'custom'; $('preset-note').textContent = 'Your rules, your random walk. Adjust the matrix and classifications below.'; }
+function custom() { $('preset').value = 'custom'; }
 function renderEditor() {
   const table = $('matrix'); table.replaceChildren();
   const head = document.createElement('thead'); const hr = document.createElement('tr');
@@ -75,7 +84,7 @@ function renderGraph() {
   marker.append(svg('path', {d:'M 0 0 L 10 5 L 0 10 z',fill:'#8c9c80'})); defs.append(marker); graph.append(defs);
   const n = matrix.length;
   positions = matrix.map((_,i) => {
-    if (n === 6) return [[155,130],[315,205],[155,300],[580,90],[580,220],[490,340]][i];
+    if (n === 6) return [[145,120],[310,215],[145,320],[580,100],[600,255],[450,340]][i];
     const angle = -Math.PI/2 + i*2*Math.PI/n;
     return [380 + 245*Math.cos(angle), 215 + 120*Math.sin(angle)];
   });
@@ -100,39 +109,105 @@ function renderGraph() {
     group.append(svg('circle',{r:31,fill:isT?'#dbe6d5':absorbing?'#f5dac5':'#e5dff0'}));
     if (absorbing) group.append(svg('circle',{r:26,fill:'none',style:'stroke:#bc9479;stroke-width:.7'}));
     group.append(svg('text',{'text-anchor':'middle',y:9},label(i)));
-    if (i===Number($('start').value)) group.append(svg('text',{'text-anchor':'middle',y:50,class:'node-caption'},'START'));
-    const inspect=()=>{selected=i; stopAnimation(); renderGraph();};
+    if (i===Number($('start').value)) group.append(svg('text',{'text-anchor':'middle',y:23,class:'node-caption'},'START'));
+    const track=svg('rect', {x:-50, y:44, width:100, height:16, rx:2, class:'population-track'});
+    if (!lastResult) track.setAttribute('hidden', '');
+    group.append(track);
+    group.append(svg('text', {'text-anchor':'middle', y:80, class:'node-count', id:`count-${i}`}));
+    const inspect=()=>{selected=i; renderGraph();};
     group.addEventListener('click',inspect); group.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();inspect();}}); graph.append(group);
   });
-  $('map-tag').textContent = `${n} STATES`;
+  if (lastResult && fromStates) updateCounts(fromStates, frameIndex);
   $('inspector').textContent = `${label(selected)} → ` + matrix[selected].map((p,j)=>p>0?`${label(j)} (${number(p)})`:null).filter(Boolean).join(' · ');
 }
-function stopAnimation() { animationVersion++; cancelAnimationFrame(animationId); document.querySelector('.traveler')?.remove(); }
-async function replay() {
-  if (!paths.length) return; stopAnimation();
-  const version=animationVersion, dot=svg('circle',{r:8,class:'traveler'}); $('graph').append(dot);
-  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-  for (let p=0;p<paths.length;p++) {
-    const path=paths[p];
-    for (let step=0;step<path.length;step++) {
-      if(version!==animationVersion) return;
-      const [x,y]=positions[path[step]], [sx,sy]=positions[path[Math.max(0,step-1)]];
-      const duration=reduced?70:360, begin=performance.now();
-      await new Promise(resolve=>{
-        function frame(now) {
-          if(version!==animationVersion) {resolve();return;}
-          const t=Math.min(1,(now-begin)/duration), ease=t*t*(3-2*t);
-          dot.setAttribute('cx',sx+(x-sx)*ease);dot.setAttribute('cy',sy+(y-sy)*ease);
-          if(t<1) animationId=requestAnimationFrame(frame);else resolve();
-        } animationId=requestAnimationFrame(frame);
-      });
-      if(version!==animationVersion) return;
-      const ended=step===path.length-1;
-      const suffix=ended?(transient.includes(path[step])?' · preview capped at 200 steps':' · left the transient set'):'';
-      $('path-note').textContent=`Sample ${p+1} / ${paths.length} · step ${step} · ${path.slice(Math.max(0,step-9),step+1).map(label).join(' → ')}${suffix}`;
-    }
+function stopAnimation(clear = true) {
+  cancelAnimationFrame(animationId); paused = true;
+  $('pause').hidden = true;
+  if (clear) { context.clearRect(0, 0, 760, 430); fromStates = null; toStates = null; }
+}
+function updateCounts(states, step) {
+  const counts = populations(states, matrix.length), total = activeConfig.num_runs;
+  let exited = 0;
+  counts.forEach((count, state) => {
+    const text = $(`count-${state}`);
+    if (text) text.textContent = `${count.toLocaleString()} · ${(100*count/total).toFixed(1)}%`;
+    if (!transient.includes(state)) exited += count;
+  });
+  const capped = step === totalFrames - 1 && exited < total;
+  $('path-note').textContent = `Step ${step} · ${exited.toLocaleString()} / ${total.toLocaleString()} exited${capped ? ' · 200-step playback limit' : ''}`;
+}
+function prepareFrame(step) {
+  frameIndex = step;
+  fromStates = frameStates(chunks, step, activeConfig.num_runs);
+  toStates = frameStates(chunks, Math.min(step + 1, totalFrames - 1), activeConfig.num_runs);
+  const before = populations(fromStates, matrix.length), after = populations(toStates, matrix.length);
+  const total = activeConfig.num_runs;
+  for (let i=0; i<total; i++) {
+    const from=fromStates[i], to=toStates[i];
+    // Filled point strips: their length is the fraction of runs in the state.
+    // Independent coordinates avoid the angle/radius correlation that made rings.
+    const width0=100*before[from]/total, width1=100*after[to]/total;
+    startX[i]=positions[from][0]-50+offsetX[i]*width0; startY[i]=positions[from][1]+46+offsetY[i]*12;
+    endX[i]=positions[to][0]-50+offsetX[i]*width1; endY[i]=positions[to][1]+46+offsetY[i]*12;
   }
-  dot.remove();
+  updateCounts(fromStates, step);
+}
+function drawPoints(fraction) {
+  context.clearRect(0, 0, 760, 430);
+  const t = fraction*fraction*(3-2*fraction), total = activeConfig.num_runs;
+  context.fillStyle = total > 10000 ? 'rgba(55,83,61,.22)' : 'rgba(55,83,61,.55)';
+  const size = total > 10000 ? 1.2 : total > 1000 ? 1.8 : 3;
+  for (let i = 0; i < total; i++) {
+    context.fillRect(startX[i]+(endX[i]-startX[i])*t-size/2, startY[i]+(endY[i]-startY[i])*t-size/2, size, size);
+  }
+}
+function tick(now) {
+  if (paused) return;
+  // Throttle drawing for large ensembles; every trajectory is still drawn.
+  const interval = activeConfig.num_runs > 50000 ? 100 : 33;
+  if (now-lastTick < interval) { animationId=requestAnimationFrame(tick); return; }
+  elapsed += Math.min(now-lastTick, 150)*playbackSpeed; lastTick = now;
+  const position = Math.max(0, (elapsed-450)/650);
+  const step = Math.min(Math.floor(position), totalFrames-1);
+  if (step !== frameIndex) prepareFrame(step);
+  drawPoints(step === totalFrames-1 ? 0 : position-step);
+  if (step === totalFrames-1) { stopAnimation(false); return; }
+  animationId=requestAnimationFrame(tick);
+}
+function scatterCoordinate(value) {
+  // Deterministic independent scatter; does not affect simulation randomness.
+  value=Math.imul(value^(value>>>16), 0x21f0aaad);
+  value=Math.imul(value^(value>>>15), 0x735a2d97);
+  return ((value^(value>>>15))>>>0)/4294967296;
+}
+function setPlaybackSpeed() {
+  const index=Number($('speed').value);
+  if (!Number.isInteger(index) || index<0 || index>=playbackSpeeds.length) return;
+  const value=playbackSpeeds[index];
+  playbackSpeed=value;
+  $('speed-value').textContent=`${value}×`;
+  $('speed').setAttribute('aria-valuetext', `${value} times speed`);
+  // Keep the current playhead; apply the new rate only to future frames.
+  lastTick=performance.now();
+}
+function replay() {
+  if (!lastResult || !chunks.length) return;
+  stopAnimation();
+  const total=activeConfig.num_runs;
+  offsetX=new Float32Array(total); offsetY=new Float32Array(total);
+  startX=new Float32Array(total); startY=new Float32Array(total); endX=new Float32Array(total); endY=new Float32Array(total);
+  for (let i=0;i<total;i++) {
+    offsetX[i]=scatterCoordinate(i*2+1);
+    offsetY[i]=scatterCoordinate(i*2+2);
+  }
+  document.querySelectorAll('.population-track').forEach(el => el.removeAttribute('hidden'));
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    prepareFrame(totalFrames-1); drawPoints(0); return;
+  }
+  elapsed=0; lastTick=performance.now(); paused=false;
+  prepareFrame(0); drawPoints(0);
+  $('pause').hidden=false; $('pause').textContent='Pause';
+  animationId=requestAnimationFrame(tick);
 }
 function boundedInteger(id,min,max,name) {
   const value=Number($(id).value);
@@ -150,46 +225,41 @@ function readConfig() {
 function setRunning(value) {
   running=value; $('settings').disabled=value; $('cancel').hidden=!value;
   document.querySelectorAll('.matrix-body input,.matrix-body select,.matrix-body button').forEach(el=>el.disabled=value);
-  $('run').innerHTML=value?'Running… <span>↗</span>':'Run experiment <span>↗</span>';
+  $('run').textContent=value?'Running…':'Run';
 }
 function showError(message) {
   const lines=message.split('\n').filter(Boolean); $('error').textContent=lines.at(-1); $('error').hidden=false;
-  $('status').textContent='Experiment stopped. Check the setup and try again.'; $('progress').hidden=true;
-  stopAnimation(); paths=[]; $('replay').disabled=true; setRunning(false);
+  $('status').textContent='Simulation stopped. Check the settings and try again.'; $('progress').hidden=true;
+  stopAnimation(); chunks=[]; $('replay').disabled=true; $('path-note').textContent=''; setRunning(false);
 }
 function run() {
   if(running)return; invalidate();
   try {activeConfig=readConfig();}catch(error){showError(error.message);return;}
-  setRunning(true); $('status').textContent='Preparing the experiment…'; $('progress').hidden=false; $('progress').value=0;
+  setRunning(true); $('status').textContent='Preparing simulation…'; $('progress').hidden=false; $('progress').value=0;
   if(!worker) {
     worker=new Worker(new URL('./worker.js',import.meta.url));
     worker.onerror=()=>{showError('The Python worker could not start. Check your connection and reload the page.');worker?.terminate();worker=null;};
     worker.onmessage=({data})=>{
       if(data.type==='status')$('status').textContent=data.message;
-      if(data.type==='preview'){paths=data.paths;$('replay').disabled=false;replay();}
+      if(data.type==='frames'){chunks.push(data);totalFrames=Math.max(totalFrames,data.frameCount);}
       if(data.type==='progress'){$('progress').value=data.done/data.total;$('status').textContent=`${data.done.toLocaleString()} / ${data.total.toLocaleString()} trajectories complete`;}
       if(data.type==='error'){showError(data.message);worker?.terminate();worker=null;}
-      if(data.type==='result'){lastResult={config:activeConfig,...data.result};renderResults(lastResult);setRunning(false);$('status').textContent=`Complete · ${data.result.runs.toLocaleString()} independent trajectories`;$('progress').value=1;}
+      if(data.type==='result'){lastResult={config:activeConfig,...data.result};renderResults(lastResult);setRunning(false);$('status').textContent=`Complete · ${data.result.runs.toLocaleString()} independent trajectories`;$('progress').value=1;$('replay').disabled=false;replay();}
     };
   }
   worker.postMessage(activeConfig);
 }
 function renderResults(result) {
-  $('empty-results').hidden=true;$('results').hidden=false;$('download').disabled=false;
-  $('result-caption').textContent=`${result.runs.toLocaleString()} trajectories · starting at ${label(result.config.start)} · seed ${result.config.seed}. Sample-path playback uses a separate random stream.`;
-  $('bars').replaceChildren();$('result-rows').replaceChildren();
+  $('results').hidden=false; $('download').disabled=false;
+  $('result-rows').replaceChildren();
   result.config.recurrent.forEach((state,i)=>{
-    const e=result.empirical[i], t=result.theoretical[i];
-    const row=document.createElement('div');row.className='bar-row';
-    row.innerHTML=`<span class="bar-name">${label(state)}</span><div class="bar-tracks"><div class="bar-track"><div class="bar-fill" style="width:${Math.max(0,Math.min(100,e*100))}%"></div></div><div class="bar-track"><div class="bar-fill theory" style="width:${Math.max(0,Math.min(100,t*100))}%"></div></div></div><span class="bar-value">${percent(e)}<small>${percent(t)}</small></span>`;
-    $('bars').append(row);
-    const tr=document.createElement('tr');
-    [label(state),percent(e),percent(t),`${(Math.abs(e-t)*100).toFixed(3)} pp`].forEach(text=>{const td=document.createElement('td');td.textContent=text;tr.append(td);});$('result-rows').append(tr);
+    const e=result.empirical[i], t=result.theoretical[i], tr=document.createElement('tr');
+    [label(state),percent(e),percent(t),`${(Math.abs(e-t)*100).toFixed(3)} pp`].forEach(text=>{const td=document.createElement('td');td.textContent=text;tr.append(td);});
+    $('result-rows').append(tr);
   });
-  $('mean').textContent=result.mean.toFixed(3);$('exact-mean').textContent=`${number(result.exactMean)} steps`;
+  $('mean').textContent=result.mean.toFixed(3); $('exact-mean').textContent=number(result.exactMean);
   const half=1.96*result.se;
   $('interval').textContent=`${number(result.mean-half)} – ${number(result.mean+half)}`;
-  $('ci-note').textContent=(Math.abs(result.mean-result.exactMean)<=half?'The exact mean lies inside this interval.':'The exact mean lies outside this interval; sampling variation can do this.')+' This is an approximate uncertainty estimate.';
 }
 $('preset').addEventListener('change',e=>loadPreset(e.target.value));
 $('start').addEventListener('change',()=>{invalidate();selected=Number($('start').value);renderGraph();});
@@ -205,8 +275,14 @@ $('resize').addEventListener('click',()=>{
 $('run').addEventListener('click',run);
 $('cancel').addEventListener('click',()=>{worker?.terminate();worker=null;invalidate();setRunning(false);$('status').textContent='Cancelled. No incomplete estimates were reported.';});
 $('replay').addEventListener('click',replay);
+$('speed').addEventListener('input',setPlaybackSpeed);
+$('pause').addEventListener('click',()=>{
+  paused=!paused; $('pause').textContent=paused?'Resume':'Pause';
+  if (paused) cancelAnimationFrame(animationId);
+  else {lastTick=performance.now(); animationId=requestAnimationFrame(tick);}
+});
 $('download').addEventListener('click',()=>{
   if(!lastResult)return;
-  const blob=new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='wandering-results.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  const blob=new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='markov-chain-results.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
-loadPreset('original');$('status').textContent='Ready when you are.';
+loadPreset('original');$('status').textContent='Ready.';

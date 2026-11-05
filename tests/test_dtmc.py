@@ -1,3 +1,4 @@
+import base64
 import json
 import unittest
 from pathlib import Path
@@ -65,14 +66,56 @@ class MarkovChainTests(unittest.TestCase):
         namespace = {}
         exec(Path('web/bridge.py').read_text(), namespace)
         config = json.loads(Path('example.json').read_text())
-        preview = json.loads(namespace['begin_experiment'](json.dumps(config)))
-        self.assertEqual(len(preview['paths']), 8)
-        namespace['simulate_batch'](1000)
-        namespace['simulate_batch'](2)
+        namespace['begin_experiment'](json.dumps(config))
+        packets = [json.loads(namespace['simulate_batch'](size)) for size in (1000, 2)]
+        recorded_outcomes = []
+        for packet in packets:
+            frames = np.frombuffer(base64.b64decode(packet['states']), dtype=np.uint8).reshape(packet['frameCount'], packet['count'])
+            np.testing.assert_array_equal(frames[0], np.zeros(packet['count']))
+            recorded_outcomes.append(frames[-1])
+            # Exited trajectories must stay at their first entry state.
+            for previous, current in zip(frames, frames[1:]):
+                exited = previous != 0
+                np.testing.assert_array_equal(previous[exited], current[exited])
         result = json.loads(namespace['finish_experiment']())
         self.assertEqual(result['runs'],1002)
         self.assertAlmostEqual(sum(result['empirical']),1)
         self.assertEqual(result['exactMean'],2)
+        final = np.concatenate(recorded_outcomes)
+        np.testing.assert_allclose(result['empirical'], [(final == s).mean() for s in config['recurrent']])
+
+    def test_observer_does_not_change_simulation(self):
+        matrix = [[.5,.2,.3],[0,1,0],[0,0,1]]
+        expected = MarkovChain(matrix, [0], [1,2], seed=17).simulate(0, 50)
+        frames = []
+        actual = MarkovChain(matrix, [0], [1,2], seed=17).simulate(
+            0, 50, on_step=lambda step, states: frames.append(states.copy()))
+        for a, b in zip(expected, actual):
+            np.testing.assert_array_equal(a, b)
+        np.testing.assert_array_equal(frames[-1], actual[0])
+        for run, exit_step in enumerate(actual[1]):
+            self.assertEqual(frames[exit_step - 1][run], 0)
+            self.assertEqual(frames[exit_step][run], actual[0][run])
+
+    def test_playback_cap_does_not_truncate_estimates(self):
+        namespace = {}
+        exec(Path('web/bridge.py').read_text(), namespace)
+        # A deterministic chain that takes 202 steps to exit.
+        n = 203
+        matrix = np.zeros((n,n))
+        for state in range(n):
+            matrix[state, min(state + 1, n - 1)] = 1
+        config = {'transition_matrix':matrix.tolist(), 'transient':list(range(n-1)),
+                  'recurrent':[n-1], 'labels':[str(i) for i in range(n)],
+                  'start':0, 'seed':10, 'max_steps':300, 'num_runs':2}
+        namespace['begin_experiment'](json.dumps(config))
+        packet = json.loads(namespace['simulate_batch'](2))
+        self.assertEqual(packet['frameCount'], 201)
+        frames = np.frombuffer(base64.b64decode(packet['states']), dtype=np.uint8).reshape(201,2)
+        np.testing.assert_array_equal(frames[-1], [200,200])
+        result = json.loads(namespace['finish_experiment']())
+        self.assertEqual(result['mean'], 202)
+        self.assertEqual(result['empirical'], [1.0])
 
 
 if __name__ == '__main__':

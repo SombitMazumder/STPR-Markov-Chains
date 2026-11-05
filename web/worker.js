@@ -19,14 +19,15 @@ self.onmessage = async ({data: config}) => {
     runtime ||= initialize();
     const py = await runtime;
     py.globals.set('config_json', JSON.stringify(config));
-    const preview = JSON.parse(await py.runPythonAsync('begin_experiment(config_json)'));
-    self.postMessage({type: 'preview', ...preview});
+    await py.runPythonAsync('begin_experiment(config_json)');
     let done = 0;
     while (done < config.num_runs) {
       let size = Math.min(1000, config.num_runs - done);
       if (config.num_runs - done - size === 1) size--;
       py.globals.set('batch_size', size);
-      await py.runPythonAsync('simulate_batch(batch_size)');
+      const packet = JSON.parse(await py.runPythonAsync('simulate_batch(batch_size)'));
+      const states = Uint8Array.from(atob(packet.states), char => char.charCodeAt(0));
+      self.postMessage({type: 'frames', offset: done, count: packet.count, frameCount: packet.frameCount, states}, [states.buffer]);
       done += size;
       self.postMessage({type: 'progress', done, total: config.num_runs});
     }

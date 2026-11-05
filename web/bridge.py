@@ -1,7 +1,10 @@
-"""Browser adapter: dtmc.py remains the simulation and theory engine."""
+"""Browser adapter: estimates and animation share the same simulated runs."""
+import base64
 import json
 import numpy as np
 from dtmc import MarkovChain
+
+PLAYBACK_STEPS = 200
 
 
 def begin_experiment(config_json):
@@ -9,27 +12,25 @@ def begin_experiment(config_json):
     config = json.loads(config_json)
     chain = MarkovChain(config['transition_matrix'], config['transient'],
                         config['recurrent'], labels=config['labels'], seed=config['seed'])
+    if chain.n > 256:
+        raise ValueError('Browser playback supports at most 256 states.')
     exact_dist, exact_mean = chain.theoretical_results(config['start'])
     outcomes, times = [], []
-    # A separate stream keeps illustrative paths independent of the estimates.
-    preview_rng = np.random.default_rng(config['seed'] + 1)
-    paths = []
-    for _ in range(8):
-        state = config['start']
-        path = [state]
-        for _ in range(min(config['max_steps'], 200)):
-            state = int(preview_rng.choice(chain.n, p=chain.P[state]))
-            path.append(state)
-            if state in chain.r_index:
-                break
-        paths.append(path)
-    return json.dumps({'paths': paths})
 
 
 def simulate_batch(size):
-    absorbed, steps = chain.simulate(config['start'], size, config['max_steps'])
+    frames = []
+
+    def record(step, states):
+        if step <= PLAYBACK_STEPS:
+            frames.append(states.astype(np.uint8))
+
+    absorbed, steps = chain.simulate(config['start'], size, config['max_steps'], on_step=record)
     outcomes.append(absorbed)
     times.append(steps)
+    # One byte per trajectory per frame; cap playback memory, not simulation time.
+    return json.dumps({'count': size, 'frameCount': len(frames),
+                       'states': base64.b64encode(np.stack(frames).tobytes()).decode('ascii')})
 
 
 def finish_experiment():

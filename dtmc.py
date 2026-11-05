@@ -94,10 +94,14 @@ class MarkovChain:
             raise ValueError("Some declared transient states cannot reach the recurrent set.")
 
     
-    def simulate(self, start, num_runs, max_steps=1_000_000):
+    def simulate(self, start, num_runs, max_steps=1_000_000, *, on_step=None):
         """
         Run num_runs independent trajectories from `start` (a transient state),
         each stopping on first entry to the recurrent set.
+
+        Optional on_step(step, states) observes the initial and subsequent states
+        of all runs, including stopped runs. Copy states to retain a snapshot;
+        the callback must not modify this array.
 
         Returns (absorbed_in, exit_steps), arrays of length num_runs:
           absorbed_in[k] - first recurrent state reached by run k
@@ -119,6 +123,8 @@ class MarkovChain:
         active = np.arange(num_runs)  # indices of runs still in the transient set
 
         step = 0
+        if on_step is not None:
+            on_step(step, current)
         
         while active.size > 0:
             step += 1
@@ -136,6 +142,8 @@ class MarkovChain:
                     still_active.append(k)
 
             active = np.array(still_active, dtype=int)
+            if on_step is not None:
+                on_step(step, current)
 
         return absorbed_in, exit_steps
 

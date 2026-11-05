@@ -1,4 +1,4 @@
-# Wandering — a Markov chain notebook
+# Markov Chain Simulator
 
 A static, interactive companion to `dtmc.py`. Edit a transition matrix, classify
 states, choose a transient starting state, and compare independent simulated
@@ -45,7 +45,10 @@ The page offers:
 - Three presets, an editable matrix, and user-selected classifications.
 - 2–12 states, 2–200,000 trajectories, start state, seed, and step limit controls.
 - A directed graph with outgoing probabilities on state selection.
-- Eight animated illustrative trajectories, capped at 200 steps for playback.
+- Concurrent playback of every simulated trajectory, with per-state counts and
+  percentages, pause/resume, replay, and a live speed slider with 0.25×, 0.5×, 1×, and 2× options (default: 0.5×). Points remain at their first entry states.
+  Points fill strips below each state; strip length is proportional to its population. Playback is capped at 200 steps; estimation
+  continues beyond that cap up to the configured step limit.
 - First-entry distributions, absolute differences, mean exit time, and an
   approximate 95% confidence interval for the mean.
 - Progress updates, cancellation, and downloadable JSON containing configuration
@@ -55,14 +58,17 @@ The browser loads the **same `dtmc.py` file** through
 [Pyodide 0.27.7](https://pyodide.org/en/0.27.7/usage/webworker.html), with NumPy in a
 Web Worker. `web/bridge.py` adapts its output for the interface. The UI does not
 reimplement the theoretical solution in JavaScript. Simulations run in batches
-of up to 1,000 for progress reporting. Sample-path playback uses a separate
-seeded random stream and is not included in the empirical estimates. Repeated
+of up to 1,000 for progress reporting. Playback records the actual runs through an optional `on_step` observer in
+`MarkovChain.simulate`; it does not draw a separate sample. Each batch transfers
+one byte per run per recorded step to the UI (up to about 40 MB for 200,000 runs
+and 201 frames). Large ensembles render at a lower frame rate without omitting
+trajectories. If some runs are still transient at step 200, the graph labels the
+playback limit and retains their states at that step. Repeated
 browser runs with identical settings reproduce results; batching means those
 samples need not be identical to a single command-line simulation call.
 
 The first experiment downloads Python and NumPy from jsDelivr, so an internet
-connection is required and the first load can take time. Google Fonts supplies
-the typefaces, with local serif/sans-serif fallbacks. Computation and experiment
+connection is required and the first load can take time. The interface uses local system fonts. Computation and experiment
 inputs stay in the browser; there is no application backend or analytics.
 
 ## Host on GitHub Pages
@@ -108,6 +114,10 @@ step-limit failure, and the Python browser adapter. JavaScript syntax is checked
 with `node --check web/app.js` and `node --check web/worker.js`.
 Run `node tests/test_worker.cjs` for worker batching and repository-subpath URL
 checks (mocked Python runtime; not a browser integration test).
+`node tests/test_playback.mjs` checks concurrent state counts and completed runs;
+`node tests/test_animation.mjs` checks all-points rendering and pause/replay with
+a mocked canvas. Python tests also check recorded paths against the estimates
+and verify that the playback cap does not truncate simulation results.
 
 Browser visual and end-to-end verification was unavailable in the authoring
 session; the local HTTP server and Python checks were verified.
