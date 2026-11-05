@@ -1,0 +1,93 @@
+--- Run 1 of 7 ---
+Start state: T0   Runs: 100000
+
+Final state      Empirical   Theoretical    |Diff|
+Abs(R0)            0.29175       0.29102   0.00073
+Rec(R1)            0.19072       0.18911   0.00161
+Rec(R2)            0.51753       0.51987   0.00234
+
+Mean exit time  empirical: 1.4822 (+/- 0.0057, 95% CI)
+Mean exit time  theoretical: 1.4774
+Theoretical value inside the 95% CI: True
+
+--- Run 2 of 7 ---
+Start state: T1   Runs: 100000
+
+Final state      Empirical   Theoretical    |Diff|
+Abs(R0)            0.28107       0.28475   0.00368
+Rec(R1)            0.37465       0.37292   0.00173
+Rec(R2)            0.34428       0.34234   0.00194
+
+Mean exit time  empirical: 1.6428 (+/- 0.0062, 95% CI)
+Mean exit time  theoretical: 1.6482
+Theoretical value inside the 95% CI: True
+
+--- Run 3 of 7 ---
+Start state: T2   Runs: 100000
+
+Final state      Empirical   Theoretical    |Diff|
+Abs(R0)            0.38455       0.38415   0.00040
+Rec(R1)            0.28338       0.28517   0.00179
+Rec(R2)            0.33207       0.33068   0.00139
+
+Mean exit time  empirical: 1.6473 (+/- 0.0062, 95% CI)
+Mean exit time  theoretical: 1.6484
+Theoretical value inside the 95% CI: True
+
+--- Run 4 of 7 ---
+Start state: T3   Runs: 100000
+
+Final state      Empirical   Theoretical    |Diff|
+Abs(R0)            0.34012       0.34099   0.00087
+Rec(R1)            0.33598       0.33394   0.00204
+Rec(R2)            0.32390       0.32507   0.00117
+
+Mean exit time  empirical: 1.6232 (+/- 0.0059, 95% CI)
+Mean exit time  theoretical: 1.6224
+Theoretical value inside the 95% CI: True
+
+--- Run 5 of 7 ---
+Start state: T4   Runs: 100000
+
+Final state      Empirical   Theoretical    |Diff|
+Abs(R0)            0.30218       0.30349   0.00131
+Rec(R1)            0.37807       0.37919   0.00112
+Rec(R2)            0.31975       0.31733   0.00242
+
+Mean exit time  empirical: 1.5808 (+/- 0.0054, 95% CI)
+Mean exit time  theoretical: 1.5776
+Theoretical value inside the 95% CI: True
+
+--- Run 6 of 7 ---
+Start state: T5   Runs: 100000
+
+Final state      Empirical   Theoretical    |Diff|
+Abs(R0)            0.42067       0.42161   0.00094
+Rec(R1)            0.29416       0.29406   0.00010
+Rec(R2)            0.28517       0.28433   0.00084
+
+Mean exit time  empirical: 1.4145 (+/- 0.0046, 95% CI)
+Mean exit time  theoretical: 1.4107
+Theoretical value inside the 95% CI: True
+
+--- Run 7 of 7 ---
+Start state: T6   Runs: 100000
+
+Final state      Empirical   Theoretical    |Diff|
+Abs(R0)            0.42898       0.42848   0.00050
+Rec(R1)            0.30707       0.30462   0.00245
+Rec(R2)            0.26395       0.26690   0.00295
+
+Mean exit time  empirical: 1.2713 (+/- 0.0040, 95% CI)
+Mean exit time  theoretical: 1.2716
+Theoretical value inside the 95% CI: True
+
+Summary across all starting states (mean exit time)
+Start          Empirical   Theoretical   In 95% CI
+T0                1.4822        1.4774        True
+T1                1.6428        1.6482        True
+T2                1.6473        1.6484        True
+T3                1.6232        1.6224        True
+T4                1.5808        1.5776        True
+T5                1.4145        1.4107        True
+T6                1.2713        1.2716        True
