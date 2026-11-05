@@ -15,20 +15,29 @@ Theory (states ordered as transient T, recurrent R):
     N = (I - Q)^-1      expected visits to each transient state
     t = N @ 1           expected steps to leave T
     B = N @ S           B[i, j] = P(first recurrent state entered is j | start i)
+By default, read input.json next to this script and write output.txt there.
+Use --config and --output to select other files. Configurations may use
+transition_matrix/start or matrix/starts for one or several starting states.
 """
 
 import argparse
 import json
 from numbers import Integral
+from pathlib import Path
 
 import numpy as np
+
+
+HERE = Path(__file__).resolve().parent
+INPUT_FILE = HERE / "input.json"
+OUTPUT_FILE = HERE / "output.txt"
 
 
 class MarkovChain:
     def __init__(self, transition_matrix, transient, recurrent, labels=None, seed=10):
         self.P = np.array(transition_matrix, dtype=float, copy=True)
-        if self.P.ndim != 2 or self.P.shape[0] != self.P.shape[1]:
-            raise ValueError("Transition matrix must be square.")
+        if self.P.ndim != 2 or self.P.shape[0] != self.P.shape[1] or self.P.shape[0] == 0:
+            raise ValueError("Transition matrix must be non-empty and square.")
         self.n = self.P.shape[0]
         self.transient = list(transient)
         self.recurrent = list(recurrent)
@@ -43,22 +52,24 @@ class MarkovChain:
 
     
     def _validate(self):
-        if self.P.ndim != 2 or self.P.shape[0] != self.P.shape[1]:
-            raise ValueError("Transition matrix must be square.")
+        if self.P.ndim != 2 or self.P.shape[0] != self.P.shape[1] or self.P.shape[0] == 0:
+            raise ValueError("Transition matrix must be non-empty and square.")
         if not np.all(np.isfinite(self.P)) or np.any(self.P < 0):
             raise ValueError("Transition probabilities must be finite and nonnegative.")
         row_sums = self.P.sum(axis=1)
         if not np.allclose(row_sums, 1.0, rtol=0, atol=1e-10):
             raise ValueError("Each row of the transition matrix must sum to 1.")
         self.P /= row_sums[:, None]  # Remove only negligible rounding error.
-        if len(self.labels) != self.n:
-            raise ValueError("Number of labels must match number of states.")
+        if len(self.labels) != self.n or len(set(self.labels)) != self.n:
+            raise ValueError("Labels must be unique and match the number of states.")
 
         for states in (self.transient, self.recurrent):
             if any(not isinstance(s, Integral) or isinstance(s, (bool, np.bool_)) for s in states):
                 raise ValueError("State indices must be integers.")
             if len(states) != len(set(states)):
                 raise ValueError("State classifications must not contain duplicates.")
+        if any(s < 0 or s >= self.n for s in self.transient + self.recurrent):
+            raise ValueError("State indices must lie between 0 and n-1.")
         t, r = set(self.transient), set(self.recurrent)
         if t & r:
             raise ValueError(f"States in both classes: {sorted(t & r)}")
@@ -149,54 +160,79 @@ class MarkovChain:
 
 
 def report(chain, start, dist_emp, mean_emp, se_emp, dist_th, mean_th, num_runs):
-    print(f"Start state: {chain.labels[start]}   Runs: {num_runs}\n")
-    print("Distribution of the first recurrent/absorbing state reached:")
-    print(f"{'Entry state':<14}{'Empirical':>12}{'Theoretical':>14}{'|Diff|':>10}")
+    lines = []
+    lines.append(f"Start state: {chain.labels[start]}   Runs: {num_runs}")
+    lines.append("")
+    lines.append("Distribution of the first recurrent/absorbing state reached:")
+    lines.append(f"{'Entry state':<14}{'Empirical':>12}{'Theoretical':>14}{'|Diff|':>10}")
     for s, e, t in zip(chain.recurrent, dist_emp, dist_th):
-        print(f"{chain.labels[s]:<14}{e:>12.5f}{t:>14.5f}{abs(e - t):>10.5f}")
-    print(f"\nMean exit time  empirical: {mean_emp:.4f} (+/- {1.96 * se_emp:.4f}, 95% CI)")
-    print(f"Mean exit time  theoretical: {mean_th:.4f}")
+        lines.append(f"{chain.labels[s]:<14}{e:>12.5f}{t:>14.5f}{abs(e - t):>10.5f}")
+    lines.append("")
+    lines.append(f"Mean exit time  empirical: {mean_emp:.4f} (+/- {1.96 * se_emp:.4f}, 95% CI)")
+    lines.append(f"Mean exit time  theoretical: {mean_th:.4f}")
     inside = abs(mean_emp - mean_th) <= 1.96 * se_emp
-    print(f"Theoretical value inside the 95% CI: {inside}")
+    lines.append(f"Theoretical value inside the 95% CI: {inside}")
+    return "\n".join(lines)
+
+
+def load_input(path):
+    with open(path, encoding="utf-8") as file:
+        return json.load(file)
 
 
 def main():
-    # Example: states 0-2 transient; 3 is absorbing; 4 and 5 form a recurrent
-    # class with transitions between its members (not individually absorbing).
-    labels = ["A", "B", "C", "D(abs)", "E(rec)", "F(rec)"]
-    P = np.array([
-        [0.2, 0.4, 0.1, 0.2, 0.1, 0.0],
-        [0.3, 0.1, 0.3, 0.0, 0.1, 0.2],
-        [0.0, 0.3, 0.3, 0.1, 0.0, 0.3],
-        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
-        [0.0, 0.0, 0.0, 0.0, 0.7, 0.3],
-    ])
-    transient = [0, 1, 2]
-    recurrent = [3, 4, 5]
-    start = 0
-    num_runs = 200_000
-
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", help="JSON file containing transition_matrix, transient, recurrent, start; optionally labels, num_runs, seed, max_steps.")
+    parser.add_argument("--config", type=Path, default=INPUT_FILE,
+                        help="JSON input file (default: input.json next to the script). Accepts transition_matrix/start or matrix/starts.")
+    parser.add_argument("--output", type=Path, default=OUTPUT_FILE,
+                        help="Report file (default: output.txt next to the script).")
     args = parser.parse_args()
-    config = {}
-    if args.config:
-        with open(args.config, encoding="utf-8") as file:
-            config = json.load(file)
-        for key in ("transition_matrix", "transient", "recurrent", "start"):
-            if key not in config:
-                parser.error(f"Configuration is missing '{key}'.")
-        P, transient, recurrent, start = (config[key] for key in
-                                         ("transition_matrix", "transient", "recurrent", "start"))
-        labels = config.get("labels")
-        num_runs = config.get("num_runs", num_runs)
+    cfg = load_input(args.config)
+    for key in ("transient", "recurrent"):
+        if key not in cfg:
+            parser.error(f"Configuration is missing '{key}'.")
+    if "transition_matrix" in cfg:
+        P = cfg["transition_matrix"]
+    elif "matrix" in cfg:
+        P = cfg["matrix"]
+    else:
+        parser.error("Configuration requires 'transition_matrix' or 'matrix'.")
+    if "starts" in cfg:
+        starts = cfg["starts"]
+    elif "start" in cfg:
+        starts = [cfg["start"]]
+    else:
+        parser.error("Configuration requires 'start' or 'starts'.")
+    if not isinstance(starts, list) or not starts:
+        parser.error("'starts' must be a non-empty list of transient state indices.")
 
-    chain = MarkovChain(P, transient, recurrent, labels=labels, seed=config.get("seed", 10))
-    absorbed_in, exit_steps = chain.simulate(start, num_runs, config.get("max_steps", 1_000_000))
-    dist_emp, mean_emp, se_emp = chain.empirical_results(absorbed_in, exit_steps)
-    dist_th, mean_th = chain.theoretical_results(start)
-    report(chain, start, dist_emp, mean_emp, se_emp, dist_th, mean_th, num_runs)
+    num_runs = cfg.get("num_runs", 200_000)
+    chain = MarkovChain(P, cfg["transient"], cfg["recurrent"],
+                        labels=cfg.get("labels"), seed=cfg.get("seed", 10))
+    # Check all starting states before doing any potentially expensive simulations.
+    for start in starts:
+        if not isinstance(start, Integral) or isinstance(start, bool) or start not in chain.t_index:
+            parser.error(f"Start state {start} is not a transient state.")
+
+    output_lines = []
+    summary_rows = []
+    for i, start in enumerate(starts):
+        absorbed_in, exit_steps = chain.simulate(start, num_runs, cfg.get("max_steps", 1_000_000))
+        dist_emp, mean_emp, se_emp = chain.empirical_results(absorbed_in, exit_steps)
+        dist_th, mean_th = chain.theoretical_results(start)
+        section = report(chain, start, dist_emp, mean_emp, se_emp, dist_th, mean_th, num_runs)
+        print(f"--- Run {i + 1} of {len(starts)} ---")
+        print(section)
+        print()
+        output_lines.extend([f"--- Run {i + 1} of {len(starts)} ---", section, ""])
+        inside = abs(mean_emp - mean_th) <= 1.96 * se_emp
+        summary_rows.append((chain.labels[start], mean_emp, mean_th, inside))
+
+    output_lines.append("Summary across all starting states (mean exit time)")
+    output_lines.append(f"{'Start':<10}{'Empirical':>14}{'Theoretical':>14}{'In 95% CI':>12}")
+    for label, mean_emp, mean_th, inside in summary_rows:
+        output_lines.append(f"{label:<10}{mean_emp:>14.4f}{mean_th:>14.4f}{str(inside):>12}")
+    args.output.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
